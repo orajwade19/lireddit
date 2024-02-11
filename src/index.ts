@@ -7,6 +7,13 @@ import {ApolloServer} from "apollo-server-express"
 import { buildSchema } from "type-graphql"
 import { HelloResolver } from "./resolvers/hello"
 import { PostResolver } from "./resolvers/post"
+import { UserResolver } from "./resolvers/user"
+
+import RedisStore from "connect-redis"
+import session from "express-session"
+import cors from "cors"
+import {createClient} from "redis"
+import { MyContext } from "./types"
 
 
 const main = async () => {
@@ -15,19 +22,65 @@ const main = async () => {
 
     const app = express();
 
+    // Initialize client.
+    let redisClient = createClient()
+    redisClient.connect().catch(console.error)
+
+    // Initialize store.
+    let redisStore = new RedisStore({
+    client: redisClient,
+    prefix: "lireddit:",
+    disableTouch:true,
+    })
+
+    app.set('trust proxy', true);
+    app.use(
+        cors({
+            credentials: true,
+            origin: [
+                "https://studio.apollographql.com",
+                "http://localhost:4000/graphql"
+            ]
+        })
+    );
+
+// Initialize session storage.
+    app.use(
+    session({
+    name: 'qid',
+    store: redisStore,
+    cookie: {
+        maxAge: 1000 * 60 * 60 * 24 * 365 * 10, //10 years
+        httpOnly: true,
+        sameSite: 'none', //csrf
+        secure: true //cookie only works in https
+    },
+    resave: false, // required: force lightweight session keep alive (touch)
+    saveUninitialized: false, // recommended: only save session when data exists
+    secret: "sadasdasdadsd",
+    }),
+    );
+
     const apolloServer = new ApolloServer(
         {
             schema : await buildSchema({
-                resolvers: [HelloResolver,PostResolver],
+                resolvers: [HelloResolver,PostResolver,UserResolver],
                 validate: false
             }),
-            context : () => ({ em : orm.em })
+            context : ( {req,res}): MyContext => ({ em : orm.em, req,res })
         }
     );
 
     await apolloServer.start();
 
-    apolloServer.applyMiddleware({ app });
+    apolloServer.applyMiddleware({ app,
+    cors:{
+        credentials: true,
+        origin: [
+            "https://studio.apollographql.com",
+            "http://localhost:4000/graphql"
+        ]
+    } });
 
     app.get('/',(_,res) => {
         res.send("hello");
